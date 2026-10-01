@@ -165,7 +165,7 @@ func (h *vlessDialer) DialContext(ctx context.Context, network string, destinati
 	if err != nil {
 		return nil, err
 	}
-	conn, err = h.wrapEncryption(conn)
+	conn, err = h.wrapEncryption(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +213,7 @@ func (h *vlessDialer) ListenPacket(ctx context.Context, destination M.Socksaddr)
 		common.Close(conn)
 		return nil, err
 	}
-	conn, err = h.wrapEncryption(conn)
+	conn, err = h.wrapEncryption(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
