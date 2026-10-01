@@ -1,0 +1,66 @@
+name: Build ARM64 Baseline
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go 1.26.5
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
+
+      - name: Show source version
+        run: |
+          git describe --tags --always
+          go version
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Build sing-box ARM64
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+        run: |
+          TAGS="with_clash_api,with_gvisor,with_quic,with_tailscale,with_utls,with_wireguard"
+
+          go build \
+            -v \
+            -trimpath \
+            -tags "$TAGS" \
+            -ldflags="-s -w -buildid=" \
+            -o sing-box-baseline \
+            ./cmd/sing-box
+
+      - name: Show result
+        run: |
+          echo "===== FILE ====="
+          file sing-box-baseline
+
+          echo "===== SIZE ====="
+          ls -lh sing-box-baseline
+          stat -c '%s bytes' sing-box-baseline
+
+          echo "===== SHA256 ====="
+          sha256sum sing-box-baseline
+
+          echo "===== VERSION ====="
+          ./sing-box-baseline version || true
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sing-box-1.12.17-baseline-linux-arm64
+          path: sing-box-baseline
+          compression-level: 0
