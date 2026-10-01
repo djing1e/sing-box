@@ -30,7 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
 
-      - name: Build sing-box ARM64
+      - name: Build sing-box ARM64 with ML-KEM
         env:
           GOOS: linux
           GOARCH: arm64
@@ -43,27 +43,24 @@ jobs:
             -trimpath \
             -tags "$TAGS" \
             -ldflags="-s -w -buildid=" \
-            -o sing-box-baseline \
+            -o sing-box-mlkem \
             ./cmd/sing-box
 
-      - name: Show result
+            - name: Show result
         run: |
           echo "===== FILE ====="
-          file sing-box-baseline
+          file sing-box-mlkem
 
           echo "===== SIZE ====="
-          ls -lh sing-box-baseline
-          stat -c '%s bytes' sing-box-baseline
+          ls -lh sing-box-mlkem
+          stat -c '%s bytes' sing-box-mlkem
 
           echo "===== SHA256 ====="
-          sha256sum sing-box-baseline
+          sha256sum sing-box-mlkem
 
-          echo "===== VERSION ====="
-          ./sing-box-baseline version || true
-
-      - name: Upload binary
+            - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: sing-box-1.12.17-baseline-linux-arm64
-          path: sing-box-baseline
+          name: sing-box-1.12.17-mlkem-linux-arm64
+          path: sing-box-mlkem
           compression-level: 0
