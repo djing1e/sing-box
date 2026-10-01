@@ -1,10 +1,10 @@
-name: Build ARM64 Baseline
+name: Build ARM64 ML-KEM
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - v1.12.17-mlkem
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,21 +14,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Go 1.26.5
+      - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.26.5'
           cache: true
 
-      - name: Show source version
+      - name: Show Go version
         run: |
-          git describe --tags --always
           go version
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          grep -E '^(go|toolchain) ' go.mod || true
 
       - name: Build sing-box ARM64 with ML-KEM
         env:
@@ -46,7 +41,7 @@ jobs:
             -o sing-box-mlkem \
             ./cmd/sing-box
 
-            - name: Show result
+      - name: Show result
         run: |
           echo "===== FILE ====="
           file sing-box-mlkem
@@ -58,7 +53,7 @@ jobs:
           echo "===== SHA256 ====="
           sha256sum sing-box-mlkem
 
-            - name: Upload binary
+      - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: sing-box-1.12.17-mlkem-linux-arm64
