@@ -2,6 +2,9 @@ name: Build ARM64 Baseline
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - v1.12.17-mlkem
 
 jobs:
   build:
