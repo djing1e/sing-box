@@ -512,12 +512,6 @@ sync
 /etc/init.d/forkop start
 sleep 5
 
-# Development-only fault injection.
-# Normal updater behavior is unchanged unless explicitly enabled.
-if [ "${TEST_ROLLBACK:-0}" = "1" ]; then
-    fail_after_removal "intentional rollback test"
-fi
-
 echo
 echo "Final checks"
 
