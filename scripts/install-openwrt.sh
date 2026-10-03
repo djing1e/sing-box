@@ -2,7 +2,7 @@
 
 set -u
 
-VERSION="v1.12.17-mlkem.1"
+VERSION="v1.12.17-mlkem.2"
 REPO="djing1e/sing-box"
 
 BINARY="sing-box-linux-arm64"
@@ -239,7 +239,7 @@ fi
 
 echo "[3/10] Checking temporary storage"
 
-ARCHIVE_SIZE=14477514
+ARCHIVE_SIZE=14478052
 
 TMP_AVAILABLE_KB="$(df -k /tmp | awk 'NR==2 {print $4}')"
 TMP_REQUIRED_KB=$(( (ARCHIVE_SIZE + 1048575) / 1024 ))
@@ -487,8 +487,15 @@ fi
 chmod 755 "$NEW" ||
     fail_after_removal "chmod failed"
 
-"$NEW" version ||
-    fail_after_removal "new sing-box cannot execute"
+NEW_VERSION="$(
+    "$NEW" version 2>/dev/null | awk 'NR==1 {print $3}'
+)" || fail_after_removal "new sing-box cannot execute"
+
+echo "Expected sing-box version: 1.12.17-mlkem.2"
+echo "Actual sing-box version:   ${NEW_VERSION}"
+
+[ "$NEW_VERSION" = "1.12.17-mlkem.2" ] ||
+    fail_after_removal "unexpected sing-box version: ${NEW_VERSION}"
 
 echo
 echo "[10/11] Validating configuration"
