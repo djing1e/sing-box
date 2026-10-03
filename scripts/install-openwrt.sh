@@ -17,6 +17,7 @@ ARCHIVE_URL="${BASE_URL}/${ARCHIVE}"
 
 SUM_FILE="/tmp/sing-box-SHA256SUMS"
 ARCHIVE_FILE="/tmp/${ARCHIVE}"
+ROLLBACK_FILE="/tmp/sing-box.rollback.gz"
 
 FORCE=0
 DRY_RUN=0
@@ -56,32 +57,64 @@ restart_forkop_after_failure() {
 
 recover_from_archive() {
     echo
-    echo "RECOVERY: restoring sing-box from verified local archive..."
+    echo "========================================"
+    echo " RECOVERY: restoring previous sing-box"
+    echo "========================================"
+
+    # Recovery may be called either before or after the new binary
+    # has been installed and started. Stop Forkop first so that no
+    # sing-box process is using the binary we are about to replace.
+    /etc/init.d/forkop stop >/dev/null 2>&1 || true
+    sleep 3
+
+    if pgrep sing-box >/dev/null 2>&1; then
+        echo "RECOVERY FAILED: sing-box is still running after Forkop stop"
+        return 1
+    fi
 
     rm -f "$NEW"
 
-    [ -s "$ARCHIVE_FILE" ] || {
-        echo "RECOVERY FAILED: archive is missing"
+    [ -s "$ROLLBACK_FILE" ] || {
+        echo "RECOVERY FAILED: rollback archive is missing"
         return 1
     }
 
-    gzip -dc "$ARCHIVE_FILE" > "$NEW" || {
+    gzip -t "$ROLLBACK_FILE" || {
+        echo "RECOVERY FAILED: rollback archive is corrupt"
+        return 1
+    }
+
+    gzip -dc "$ROLLBACK_FILE" > "$NEW" || {
         rm -f "$NEW"
-        echo "RECOVERY FAILED: decompression failed"
+        echo "RECOVERY FAILED: rollback decompression failed"
         return 1
     }
 
     RECOVERY_SHA="$(sha256sum "$NEW" | awk '{print $1}')"
 
-    [ "$RECOVERY_SHA" = "$EXPECTED_BINARY" ] || {
+    [ "$RECOVERY_SHA" = "$CURRENT_SHA" ] || {
         rm -f "$NEW"
-        echo "RECOVERY FAILED: checksum mismatch"
+        echo "RECOVERY FAILED: previous binary checksum mismatch"
+        return 1
+    }
+
+    RECOVERY_SIZE="$(wc -c < "$NEW")"
+
+    [ "$RECOVERY_SIZE" = "$CURRENT_SIZE" ] || {
+        rm -f "$NEW"
+        echo "RECOVERY FAILED: previous binary size mismatch"
         return 1
     }
 
     chmod 755 "$NEW" || {
         rm -f "$NEW"
         echo "RECOVERY FAILED: chmod failed"
+        return 1
+    }
+
+    "$NEW" version >/dev/null 2>&1 || {
+        rm -f "$NEW"
+        echo "RECOVERY FAILED: previous binary cannot execute"
         return 1
     }
 
@@ -96,8 +129,17 @@ recover_from_archive() {
     /etc/init.d/forkop start >/dev/null 2>&1 || true
     sleep 3
 
+    RESTORED_SHA="$(sha256sum "$INSTALL" | awk '{print $1}')"
+
+    [ "$RESTORED_SHA" = "$CURRENT_SHA" ] || {
+        echo "RECOVERY FAILED: installed binary checksum mismatch"
+        return 1
+    }
+
     if pgrep sing-box >/dev/null 2>&1; then
-        echo "RECOVERY: sing-box restored and Forkop started"
+        echo "RECOVERY: previous sing-box restored"
+        echo "RECOVERY: SHA256 $RESTORED_SHA"
+        echo "RECOVERY: Forkop started successfully"
         return 0
     fi
 
@@ -108,7 +150,21 @@ recover_from_archive() {
 fail_after_removal() {
     echo
     echo "ERROR: $1"
-    recover_from_archive || true
+
+    if recover_from_archive; then
+        echo
+        echo "Previous sing-box was restored successfully."
+        echo "Rollback archive retained until updater exits."
+    else
+        echo
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+        echo " CRITICAL: AUTOMATIC ROLLBACK FAILED"
+        echo " DO NOT REBOOT"
+        echo " Rollback archive:"
+        echo " $ROLLBACK_FILE"
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    fi
+
     echo
     exit 1
 }
@@ -286,7 +342,53 @@ if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
 fi
 
-echo "[6/10] Stopping Forkop"
+echo "[6/11] Creating rollback archive"
+
+rm -f "$ROLLBACK_FILE"
+
+# Check RAM/tmpfs capacity again immediately before creating rollback.
+TMP_AVAILABLE_BEFORE_ROLLBACK_KB="$(df -k /tmp | awk 'NR==2 {print $4}')"
+ROLLBACK_ESTIMATE_KB=$(( (CURRENT_SIZE + 1023) / 1024 ))
+
+echo "Available /tmp before rollback: ${TMP_AVAILABLE_BEFORE_ROLLBACK_KB} KB"
+echo "Worst-case rollback estimate:   ${ROLLBACK_ESTIMATE_KB} KB"
+
+[ "$TMP_AVAILABLE_BEFORE_ROLLBACK_KB" -gt "$ROLLBACK_ESTIMATE_KB" ] ||
+    fail "not enough /tmp space for rollback archive"
+
+gzip -1 -c "$INSTALL" > "$ROLLBACK_FILE" ||
+    fail "failed to create rollback archive"
+
+ROLLBACK_SIZE="$(wc -c < "$ROLLBACK_FILE")"
+
+echo "Rollback archive size: ${ROLLBACK_SIZE} bytes"
+
+gzip -t "$ROLLBACK_FILE" ||
+    fail "rollback archive failed gzip integrity check"
+
+ROLLBACK_SHA="$(
+    gzip -dc "$ROLLBACK_FILE" | sha256sum | awk '{print $1}'
+)"
+
+ROLLBACK_UNCOMPRESSED_SIZE="$(
+    gzip -dc "$ROLLBACK_FILE" | wc -c
+)"
+
+echo "Current SHA256:         $CURRENT_SHA"
+echo "Rollback SHA256:        $ROLLBACK_SHA"
+echo "Current size:           $CURRENT_SIZE bytes"
+echo "Rollback restored size: $ROLLBACK_UNCOMPRESSED_SIZE bytes"
+
+[ "$ROLLBACK_SHA" = "$CURRENT_SHA" ] ||
+    fail "rollback archive SHA256 does not match current sing-box"
+
+[ "$ROLLBACK_UNCOMPRESSED_SIZE" = "$CURRENT_SIZE" ] ||
+    fail "rollback archive size does not match current sing-box"
+
+echo "Rollback archive fully verified."
+echo
+
+echo "[7/11] Stopping Forkop"
 
 /etc/init.d/forkop stop
 sleep 3
@@ -307,11 +409,12 @@ echo "Forkop stopped."
 echo "NetBird PID: $NETBIRD_PID_AFTER_STOP"
 
 if [ "$NETBIRD_PID_AFTER_STOP" != "$CURRENT_NETBIRD_PID" ]; then
-    echo "WARNING: NetBird PID changed."
+    restart_forkop_after_failure
+    fail "NetBird PID changed; old sing-box was not removed"
 fi
 
 echo
-echo "[7/10] Replacing sing-box"
+echo "[8/11] Replacing sing-box"
 
 rm -f "$NEW"
 
@@ -354,7 +457,7 @@ chmod 755 "$NEW" ||
     fail_after_removal "new sing-box cannot execute"
 
 echo
-echo "[8/10] Validating configuration"
+echo "[9/11] Validating configuration"
 
 if [ -f /etc/sing-box/config.json ]; then
     "$NEW" check -c /etc/sing-box/config.json ||
@@ -364,7 +467,7 @@ else
 fi
 
 echo
-echo "[9/10] Installing and starting"
+echo "[10/11] Installing and starting"
 
 mv "$NEW" "$INSTALL" ||
     fail_after_removal "could not move new binary into place"
@@ -375,31 +478,43 @@ sync
 /etc/init.d/forkop start
 sleep 5
 
+# Development-only fault injection.
+# Normal updater behavior is unchanged unless explicitly enabled.
+if [ "${TEST_ROLLBACK:-0}" = "1" ]; then
+    fail_after_removal "intentional rollback test"
+fi
+
 echo
-echo "[10/10] Final checks"
+echo "[11/11] Final checks"
 
 FORKOP_STATUS="$(/etc/init.d/forkop status 2>/dev/null || true)"
 
 echo "Forkop status: $FORKOP_STATUS"
 
 echo "$FORKOP_STATUS" | grep -q "running" ||
-    fail "Forkop is not running; archive retained in /tmp"
+    fail_after_removal "Forkop is not running with new sing-box"
 
 pgrep sing-box >/dev/null 2>&1 ||
-    fail "sing-box is not running; archive retained in /tmp"
+    fail_after_removal "new sing-box is not running"
 
+# NetBird is deliberately never stopped or restarted by this updater.
+# If it disappeared during the update, restore the previous sing-box
+# while local execution is still available.
 pgrep netbird >/dev/null 2>&1 ||
-    fail "NetBird is not running"
+    fail_after_removal "NetBird is not running after update"
 
 FINAL_SHA="$(
     sha256sum "$INSTALL" | awk '{print $1}'
 )"
 
 [ "$FINAL_SHA" = "$EXPECTED_BINARY" ] ||
-    fail "installed binary checksum mismatch"
+    fail_after_removal "installed binary checksum mismatch"
 
 FINAL_PID="$(pgrep -o sing-box 2>/dev/null || true)"
 FINAL_NETBIRD_PID="$(pgrep -o netbird 2>/dev/null || true)"
+
+[ "$FINAL_NETBIRD_PID" = "$CURRENT_NETBIRD_PID" ] ||
+    fail_after_removal "NetBird PID changed during update"
 
 echo
 echo "Forkop:      OK"
@@ -421,6 +536,7 @@ if [ -n "$FINAL_PID" ]; then
         tail -n 30 || true
 fi
 
+rm -f "$ROLLBACK_FILE"
 cleanup_tmp
 
 echo
