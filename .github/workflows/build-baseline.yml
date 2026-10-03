@@ -37,14 +37,20 @@ jobs:
             -v \
             -trimpath \
             -tags "$TAGS" \
-            -ldflags="-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=1.12.17-mlkem.1" \
+            -ldflags="-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=1.12.17-mlkem.2" \
             -o sing-box-mlkem \
             ./cmd/sing-box
 
-      - name: Show result
+      - name: Verify and package
         run: |
+          set -eu
+
           echo "===== FILE ====="
           file sing-box-mlkem
+
+          echo "===== VERSION ====="
+          strings sing-box-mlkem | grep -F '1.12.17-mlkem.2'
+          go version -m sing-box-mlkem
 
           echo "===== SIZE ====="
           ls -lh sing-box-mlkem
@@ -53,9 +59,26 @@ jobs:
           echo "===== SHA256 ====="
           sha256sum sing-box-mlkem
 
+          echo "===== PACKAGE ====="
+          cp sing-box-mlkem sing-box-linux-arm64
+          chmod 755 sing-box-linux-arm64
+
+          gzip -9 -n -c sing-box-linux-arm64 > sing-box-linux-arm64.gz
+
+          sha256sum             sing-box-linux-arm64             sing-box-linux-arm64.gz             > SHA256SUMS
+
+          gzip -t sing-box-linux-arm64.gz
+
+          echo "===== RELEASE FILES ====="
+          wc -c sing-box-linux-arm64 sing-box-linux-arm64.gz
+          cat SHA256SUMS
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: sing-box-1.12.17-mlkem-linux-arm64
-          path: sing-box-mlkem
+          name: sing-box-1.12.17-mlkem.2-linux-arm64
+          path: |
+            sing-box-linux-arm64
+            sing-box-linux-arm64.gz
+            SHA256SUMS
           compression-level: 0
