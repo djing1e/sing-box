@@ -19,7 +19,23 @@ SUM_FILE="/tmp/sing-box-SHA256SUMS"
 ARCHIVE_FILE="/tmp/${ARCHIVE}"
 
 FORCE=0
-[ "${1:-}" = "--force" ] && FORCE=1
+DRY_RUN=0
+
+case "${1:-}" in
+    "")
+        ;;
+    --force)
+        FORCE=1
+        ;;
+    --dry-run)
+        DRY_RUN=1
+        FORCE=1
+        ;;
+    *)
+        echo "Usage: $0 [--force|--dry-run]"
+        exit 2
+        ;;
+esac
 
 fail() {
     echo
@@ -224,16 +240,30 @@ OVERLAY_AVAILABLE_KB="$(df -k / | awk 'NR==2 {print $4}')"
 OLD_SIZE_KB=$(( (CURRENT_SIZE + 1023) / 1024 ))
 NEW_SIZE_KB=$(( (STREAM_SIZE + 1023) / 1024 ))
 
-# Allow a small filesystem/metadata safety margin.
 SAFETY_KB=512
 
 POTENTIAL_KB=$((OVERLAY_AVAILABLE_KB + OLD_SIZE_KB))
-REQUIRED_KB=$((NEW_SIZE_KB + SAFETY_KB))
 
 echo "Currently free:       ${OVERLAY_AVAILABLE_KB} KB"
 echo "Old sing-box:         ${OLD_SIZE_KB} KB"
+echo "New sing-box:         ${NEW_SIZE_KB} KB"
 echo "Available after rm:   ~${POTENTIAL_KB} KB"
-echo "New + safety margin:  ${REQUIRED_KB} KB"
+
+if [ "$NEW_SIZE_KB" -le "$OLD_SIZE_KB" ]; then
+    # Replacement is same size or smaller. Do not require extra free
+    # overlay before removal: the old binary itself provides the space.
+    REQUIRED_KB="$NEW_SIZE_KB"
+
+    echo "Replacement:          same size or smaller"
+    echo "Required after rm:    ${REQUIRED_KB} KB"
+else
+    # New binary is larger. Require the new binary plus a small margin.
+    REQUIRED_KB=$((NEW_SIZE_KB + SAFETY_KB))
+
+    echo "Replacement:          larger binary"
+    echo "Safety margin:        ${SAFETY_KB} KB"
+    echo "Required after rm:    ${REQUIRED_KB} KB"
+fi
 
 [ "$POTENTIAL_KB" -ge "$REQUIRED_KB" ] ||
     fail "not enough overlay capacity to replace sing-box"
@@ -241,6 +271,20 @@ echo "New + safety margin:  ${REQUIRED_KB} KB"
 echo
 echo "All non-destructive checks passed."
 echo
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo "========================================"
+    echo " DRY RUN completed successfully"
+    echo " No services were stopped or modified"
+    echo "========================================"
+    echo
+    echo "Current sing-box remains installed."
+    echo "Forkop remains running."
+    echo "NetBird remains untouched."
+    echo
+    cleanup_tmp
+    exit 0
+fi
 
 echo "[6/10] Stopping Forkop"
 
