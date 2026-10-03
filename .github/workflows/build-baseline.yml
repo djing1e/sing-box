@@ -37,7 +37,7 @@ jobs:
             -v \
             -trimpath \
             -tags "$TAGS" \
-            -ldflags="-s -w -buildid=" \
+            -ldflags="-s -w -buildid= -X github.com/sagernet/sing-box/constant.Version=1.12.17-mlkem.1" \
             -o sing-box-mlkem \
             ./cmd/sing-box
 
