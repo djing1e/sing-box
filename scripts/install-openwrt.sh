@@ -325,6 +325,44 @@ fi
     fail "not enough overlay capacity to replace sing-box"
 
 echo
+echo "[6/11] Checking rollback capacity"
+
+# Measure the current binary with the same gzip level that will be used
+# for the real rollback archive. This creates no file and changes nothing.
+ROLLBACK_ESTIMATE_BYTES="$(
+    gzip -1 -c "$INSTALL" | wc -c
+)"
+
+ROLLBACK_ESTIMATE_KB=$(( (ROLLBACK_ESTIMATE_BYTES + 1023) / 1024 ))
+
+TMP_AVAILABLE_BEFORE_ROLLBACK_KB="$(
+    df -k /tmp | awk 'NR==2 {print $4}'
+)"
+
+MEM_AVAILABLE_KB="$(
+    awk '/^MemAvailable:/ {print $2}' /proc/meminfo
+)"
+
+MEMORY_RESERVE_KB=16384
+MEMORY_REQUIRED_KB=$((ROLLBACK_ESTIMATE_KB + MEMORY_RESERVE_KB))
+
+echo "Rollback gzip estimate:         ${ROLLBACK_ESTIMATE_BYTES} bytes"
+echo "Rollback estimate:              ${ROLLBACK_ESTIMATE_KB} KB"
+echo "Available /tmp:                 ${TMP_AVAILABLE_BEFORE_ROLLBACK_KB} KB"
+echo "Available memory:               ${MEM_AVAILABLE_KB} KB"
+echo "Memory reserve after rollback:  ${MEMORY_RESERVE_KB} KB"
+echo "Required available memory:      ${MEMORY_REQUIRED_KB} KB"
+
+[ "$TMP_AVAILABLE_BEFORE_ROLLBACK_KB" -gt "$ROLLBACK_ESTIMATE_KB" ] ||
+    fail "not enough /tmp space for rollback archive"
+
+[ -n "$MEM_AVAILABLE_KB" ] ||
+    fail "could not determine MemAvailable"
+
+[ "$MEM_AVAILABLE_KB" -ge "$MEMORY_REQUIRED_KB" ] ||
+    fail "not enough available memory to safely create rollback archive"
+
+echo
 echo "All non-destructive checks passed."
 echo
 
@@ -342,23 +380,12 @@ if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
 fi
 
-echo "[6/11] Creating rollback archive"
+echo "[7/11] Creating rollback archive"
 
 rm -f "$ROLLBACK_FILE"
 
-# Check RAM/tmpfs capacity again immediately before creating rollback.
-TMP_AVAILABLE_BEFORE_ROLLBACK_KB="$(df -k /tmp | awk 'NR==2 {print $4}')"
-ROLLBACK_ESTIMATE_KB=$(( (CURRENT_SIZE + 1023) / 1024 ))
-
-echo "Available /tmp before rollback: ${TMP_AVAILABLE_BEFORE_ROLLBACK_KB} KB"
-echo "Worst-case rollback estimate:   ${ROLLBACK_ESTIMATE_KB} KB"
-
-[ "$TMP_AVAILABLE_BEFORE_ROLLBACK_KB" -gt "$ROLLBACK_ESTIMATE_KB" ] ||
-    fail "not enough /tmp space for rollback archive"
-
 gzip -1 -c "$INSTALL" > "$ROLLBACK_FILE" ||
     fail "failed to create rollback archive"
-
 ROLLBACK_SIZE="$(wc -c < "$ROLLBACK_FILE")"
 
 echo "Rollback archive size: ${ROLLBACK_SIZE} bytes"
@@ -388,7 +415,7 @@ echo "Rollback restored size: $ROLLBACK_UNCOMPRESSED_SIZE bytes"
 echo "Rollback archive fully verified."
 echo
 
-echo "[7/11] Stopping Forkop"
+echo "[8/11] Stopping Forkop"
 
 /etc/init.d/forkop stop
 sleep 3
@@ -414,7 +441,7 @@ if [ "$NETBIRD_PID_AFTER_STOP" != "$CURRENT_NETBIRD_PID" ]; then
 fi
 
 echo
-echo "[8/11] Replacing sing-box"
+echo "[9/11] Replacing sing-box"
 
 rm -f "$NEW"
 
@@ -428,15 +455,22 @@ sync
 ACTUAL_FREE_KB="$(df -k / | awk 'NR==2 {print $4}')"
 
 echo "Free overlay after removal: ${ACTUAL_FREE_KB} KB"
+echo "Writing new binary to compressed overlay..."
 
-if [ "$ACTUAL_FREE_KB" -lt "$REQUIRED_KB" ]; then
-    fail_after_removal "not enough space after removing old sing-box"
-fi
-
+# Do not compare df free space with the logical binary size here.
+# OpenWrt overlay may use transparent compression (for example UBIFS),
+# so logical file size is not equal to physical flash consumption.
+#
+# The verified previous binary is already stored in RAM as rollback.gz.
+# If the write fails (including ENOSPC), remove the partial file and
+# immediately restore the previous binary.
 if ! gzip -dc "$ARCHIVE_FILE" > "$NEW"; then
     rm -f "$NEW"
-    fail_after_removal "could not decompress new sing-box"
+    sync
+    fail_after_removal "could not write new sing-box to overlay"
 fi
+
+sync
 
 ACTUAL_BINARY="$(
     sha256sum "$NEW" | awk '{print $1}'
@@ -457,7 +491,7 @@ chmod 755 "$NEW" ||
     fail_after_removal "new sing-box cannot execute"
 
 echo
-echo "[9/11] Validating configuration"
+echo "[10/11] Validating configuration"
 
 if [ -f /etc/sing-box/config.json ]; then
     "$NEW" check -c /etc/sing-box/config.json ||
@@ -467,7 +501,7 @@ else
 fi
 
 echo
-echo "[10/11] Installing and starting"
+echo "[11/11] Installing and starting"
 
 mv "$NEW" "$INSTALL" ||
     fail_after_removal "could not move new binary into place"
@@ -485,7 +519,7 @@ if [ "${TEST_ROLLBACK:-0}" = "1" ]; then
 fi
 
 echo
-echo "[11/11] Final checks"
+echo "Final checks"
 
 FORKOP_STATUS="$(/etc/init.d/forkop status 2>/dev/null || true)"
 
